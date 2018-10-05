@@ -1,0 +1,290 @@
+---
+title: "Dota 2: Why Am I Always Losing?"
+output: html_notebook
+---
+
+# Introduction
+
+Dota 2 is a multiplayer online game of a high fantasy sort that pits two teams of five against each other.
+The ultimate goal of each team is to destroy the headquarters of the opposition.
+To achieve this, a team must work together to secure objectives on the map, earn gold to buy items, and become more powerful by learning new abilities.
+While the concept seems simple in principle, the reality is that there are multiple moving parts and an always-changing metagame (defined as the tendencies of how heroes are played).
+Despite that, there are certain principles that players can follow to define a win condition for their game.
+In general, if you minimize the amount of deaths you have and you maximize your gold and experience, you should be able to accumulate enough of an advantage to overcome your opponents.
+
+I have been playing on and off for a while now but I have not really been able to improve.
+I'll mention that I have been working on my PhD and on being healthy, though whether or not that's a legitimate excuse for not playing Dota 2 is up in the air.
+Intuitively, I know the general aspects of how I can improve (mentioned above) but what would be interesting to me is to find a clear path to specific things I can do to improve, or how I can capitalize upon my strengths to be a better Dota 2 player.
+
+# Data Acquisition
+
+I obtained all of my match data (since I started playing back in 2012!) via a Python (3.x) script that I wrote.
+It uses the `urllib.request` module to obtain data via the OpenDota API.
+The code is shown below and is a bit long because I wanted a lot of control over which parameters to take.
+
+```{python}
+from urllib.request import Request, urlopen
+from json import loads
+from time import sleep
+
+with open('match_data.txt','w') as f:
+    # general match information
+    f.write('match_id')
+    f.write(',win')
+    f.write(',is_dire')
+    f.write(',patch')
+    f.write(',game_mode')
+    f.write(',lobby_type')
+    f.write(',duration')
+    # in-game support stats
+    f.write(',obs_placed')
+    f.write(',sen_placed')
+    f.write(',camps_stacked')
+    # hero information
+    f.write(',hero_id')
+    f.write(',level')
+    f.write(',item_0')
+    f.write(',item_1')
+    f.write(',item_2')
+    f.write(',item_3')
+    f.write(',item_4')
+    f.write(',item_5')
+    # economy stats
+    f.write(',kda')
+    f.write(',last_hits_per_min')
+    f.write(',denies')
+    f.write(',ka_per_min')
+    f.write(',kills_per_min')
+    f.write(',deaths_per_min')
+    f.write(',gold_per_min')
+    f.write(',xp_per_min')
+    f.write(',pct_team_gpm')
+    f.write(',pct_team_xpm')
+    f.write('\n')
+    
+# Obtain a list of match summaries
+    
+req = Request('https://api.opendota.com/api/players/31631995/matches')
+
+with urlopen(req) as response:
+    match_summaries = loads(response.read())
+
+counter = 0    
+
+for summary in match_summaries:
+    
+    # query once per three seconds, AT MOST
+    sleep(3)
+    
+    player_slot = summary['player_slot']
+    dire = player_slot // 2 ** 7
+    player_index = player_slot % 2 ** 7 + 5 * dire
+    
+    match_id = summary['match_id']
+    
+    if player_slot > 100 and summary['radiant_win']:
+        win = 1
+    elif player_slot < 100 and not summary['radiant_win']:
+        win = 1
+    else:
+        win = 0
+    
+    game_mode = summary['game_mode']
+    lobby_type = summary['lobby_type']
+    duration = summary['duration']
+    hero_id = summary['hero_id']
+
+    game_minutes = duration / 60
+    
+    req = Request('https://api.opendota.com/api/matches/{}'.format(match_id))
+    
+    # with statement known to output
+    # urllib.error.HTTPError: HTTP Error 502: Bad Gateway
+    
+    with urlopen(req) as response:
+        match_data = loads(response.read())
+    
+    # obtain team stats
+    
+    team_gpm = 0
+    team_xpm = 0
+    
+    if dire:
+        team_range = range(5,10)
+    else:
+        team_range = range(1,5)
+    
+    for team_player in team_range:
+        team_gpm += match_data['players'][team_player]['gold_per_min']
+        team_xpm += match_data['players'][team_player]['xp_per_min']
+    
+    player_info = match_data['players'][player_index]
+    
+    patch = player_info['patch']
+    
+    # support information
+    obs_placed = player_info['obs_placed']
+    sen_placed = player_info['sen_placed']
+    camps_stacked = player_info['camps_stacked']
+    
+    # hero information
+    level = player_info['level']
+    item_0 = player_info['item_0']
+    item_1 = player_info['item_1']
+    item_2 = player_info['item_2']
+    item_3 = player_info['item_3']
+    item_4 = player_info['item_4']
+    item_5 = player_info['item_5']
+    
+    # economy and fighting
+    kda = player_info['kda']
+    lh_per_min = player_info['benchmarks']['last_hits_per_min']['raw']
+    denies = player_info['denies']
+    ka_per_min = (player_info['kills'] + player_info['assists']) / game_minutes
+    deaths_per_min = player_info['deaths'] / game_minutes
+    gpm = player_info['benchmarks']['gold_per_min']['raw']
+    xpm = player_info['benchmarks']['xp_per_min']['raw']
+    pct_team_gpm = gpm / team_gpm
+    pct_team_xpm = xpm / team_xpm
+    
+    match_parameter_list = [match_id, win, dire, patch, game_mode, lobby_type, duration,
+                            obs_placed, sen_placed, camps_stacked,
+                            hero_id, level, item_0, item_1, item_2, item_3, item_4, item_5,
+                            kda, lh_per_min, denies, ka_per_min, deaths_per_min, gpm, xpm, pct_team_gpm, pct_team_xpm]
+    
+    match_parameter_list = [str(x) for x in match_parameter_list]
+    
+    with open('match_data.txt','a') as f:
+        f.write(','.join(match_parameter_list))
+        f.write('\n')
+        
+    counter += 1
+    
+    if counter % 100 == 0:
+        print('Matches obtained: {}/{}'.format(counter,len(match_summaries)))
+```
+
+Unfortunately, some of the data that I hoped would be useful (e.g. `obs_placed` and `camps_stacked`) turned out to be a complete disaster. That said, there were plenty of other reliable features like GPM or XPM, which is always recorded.
+
+# Exploratory Work
+
+I'll jump straight to what I think is interesting.
+Here I am plotting my wins as a function of kills + assists per minute of gametime (blue dots).
+The red solid line is a fit to the data with a sigmoid function which can be taken to mean the probability of winning.
+
+```{r}
+x <- match_data$ka_per_min
+p <- match_data$win
+
+# Starting parameters chosen because that seemed to approximate data
+nonlinear_model <- nls(p ~ a / (1 + exp(-b * (x - c))), start=c(a=1,b=10,c=0.4), control=nls.control(tol=1e-9))
+
+plot(match_data$ka_per_min,match_data$win,main="Wins vs. Kills+Assists Per Minute",
+     xlab="Kills+Assists Per Minute",ylab="Wins",
+     col='blue')
+curve(0.9684 / (1+exp(-6.6567*(x-0.3959))),from=0,to=1.2, col='red', lwd=10, add=TRUE)
+```
+
+Something that I found interesting was this plot in combination with a similar one.
+The next figure is a plot of my wins as a function of kills per minute of gametime (blue dots).
+Again, the red solid line is a fit to the data also to be taken to be the probability of winning.
+
+```{r}
+x <- match_data$kills_per_min
+p <- match_data$win
+
+nonlinear_model <- nls(p ~ 1 - a / (1 + exp(-b * (x - c))), start=c(a=1,b=10,c=0.4), control=nls.control(tol=1e-9))
+
+plot(match_data$kills_per_min,match_data$win,
+     main="Wins vs. Kills Per Minute",
+     xlab = "Kills Per Minute", ylab = "Wins",
+     col="blue")
+curve(1 - 0.9866 / (1+exp(-20.4909*(x-0.1577))),from=0,to=1.2, col='red', lwd=10, add=TRUE)
+```
+
+What I did not expect was that the kills per minute, which I thought would be a subset of kills + assists per minute, is actually negatively correlated with winning.
+Perhaps this could provide some insight as to what is happening with my gameplay.
+I'll make the following observations:
+
+1) Carries should be getting more kills per game.
+
+2) A point for an assist is awarded if the target dies and you have dealt damage or applied a debuff to the target or you applied a buff to the killer of the target.
+
+The first observation is both a prescriptive and a descriptive statement.
+Carries should be getting more kills per game because that allows them to secure a victory (prescriptive).
+Because we expect carries to become powerful over time, then it should be the case that they rack up kills as the game goes on (descriptive).
+But here it seems like that the more kills I have per game then I have a higher probability of losing.
+To explain this I can think of two scenarios:
+
+1) As a non-carry hero, I am taking away kills from carries.
+
+2) As a carry hero, I simply do not have the ability to secure a game.
+
+The first point can be important because a kill for a hero grants reliable gold which can be used to buy better items or to buyback.
+Moreover, a kill streak counter builds up, so preventing a carry from building up this chain can stymie the flow of gold.
+I should point out that while stealing a kill point from a carry may not necessarily be the ideal situation, a carry that participates still obtains a non-negligible amount of gold, allowing the carry hero to build up over time.
+Moreover, a support hero can also build up his or her items to increase their survivability.
+The second point is important to consider because it could indicate the simple hypothesis that I cannot play carry heroes well.
+
+```{r}
+# Some other code to separate data
+carry <- match_data[,match_data$is_carry == 1]
+not_carry <- match_data[match_data$is_carry == 0,]
+
+hist(carry$kills_per_min, main="Kills Per Minute", xlab="Kills Per Minute", ylab="Normalized density", freq = F, col=rgb(1,0,0,0.4))
+hist(not_carry$kills_per_min, freq = F, col=rgb(0,0,1,0.4),add = T,legend=T)
+legend("topright", c("Carry","Non-carry"), col=c(rgb(1,0,0,0.4),rgb(0,0,1,0.4)), lwd=10)
+```
+
+There is no set minimum for how many more kills a carry should get but generally speaking, carry heroes on the winning teams tend to get at least 2 times more kills than non-carry heroes (in particular, the support heroes).
+The data above here shows my gameplay with carry vs. non-carry heroes.
+At worst, one would expect that carries get about as many kills as other heroes.
+At best, the peak for the kills per minute of a carry should be shifted to the right because a carry should be obtaining more kills.
+To me, it is not surprising that with respect to kills per minute, the distributions look exactly the same.
+To confirm that I truly do not play the carry role well, I can look at the win percentages.
+
+```{r}
+carry_data <- match_data[,c("win","is_carry")]
+
+carry_data$win <- as.factor(carry_data$win)
+carry_data$is_carry <- as.factor(carry_data$is_carry)
+
+levels(carry_data$win)[levels(carry_data$win) == 0] <- "Loss"
+levels(carry_data$win)[levels(carry_data$win) == "win"] <- "Win"
+levels(carry_data$is_carry)[levels(carry_data$is_carry) == 0] <- "Non-carry"
+levels(carry_data$is_carry)[levels(carry_data$is_carry) == 1] <- "Carry"
+
+ggplot(carry_data, aes(fill = win)) +
+  geom_bar(aes(x = win, y = ..prop.., group = is_carry, fill = win)) +
+  facet_wrap(~ is_carry) +
+  ggtitle("Win/Loss Proportion for Carry/Non-carry Heroes") + labs(x="",y="Proportion Won")
+```
+
+Here, it is clear that indeed I am absolute garbage at playing a carry.
+On the other hand, it is clear from this plot and the kills + assists per minute graph that my strength lies in supporting.
+Support heroes tend to stay on the outskirts of battle and provide a smaller proportion of damage, particularly in the late game.
+For this reason, good supports ought to stay out of vision yet cast spells and do damage whenever possible.
+Objectively, I am still not great at this as evidenced by my losing record as non-carry heroes, but certainly my skill with non-carry heroes is clearly better than that for carry heroes.
+
+# Conclusions
+
+By examining a strange combination of data of wins as a function of kills and kills + assists per minute, I have determined that it is likely my inability to carry which is causing me to lose more games overall.
+With regards to what I ought to do, this does not mean that I should never carry.
+Rather, it simply means that I need to practice that role more.
+
+### What can I do to practice the carry role?
+
+There seems to be two confusing pieces of data here.
+First, there is the data which says that a higher kill count per minute is correlated with me losing.
+Second, there is the data that demonstrates that my kills per minute as a carry is as much as a non-carry.
+As a carry, I'm supposed to have a higher kill count, but it is ridiculous to say that if I work towards that goal then I will lose more.
+In fact, this knowledge should be used to infer a deeper problem: perhaps the fundamental issue is that even if I secure an advantage in terms of kills, I do not know how to lead the team to victory.
+Given an advantage in kills (and by proxy, gold and experience), it would be a good idea to work on encouraging the team to push to destroy the opposing team.
+
+### Overall, what can I do to get a higher win rate?
+
+From this data, it seems that if I continue to work as a team, particularly during teamfights, then it certainly helps to secure a win.
+Even as a carry, given that more kills + assists tends to lead to prosperous results, it ought to be a goal that I participate in teamfights.
+Knowing my own playstyle, I would admit that there are times when I am farming and not participating in a teamfight halfway across the map because I feel behind on farm.
+In those types of games, I notice that supports are never too far away from me in terms of levels, which should not happen if a carry is dominant.
+Of course, this has to be balanced with keeping a steady income so that I can survive and contribute to teamfights.
